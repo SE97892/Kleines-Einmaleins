@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Einmaleins-Matching (index.html)</title>
+  <style>
+    :root{
+      --bg:#f0f4f8;
+      --card:#ffffff;
+      --accent:#2b7cff;
+      --good:#2ecc71;
+      --bad:#e74c3c;
+      --text:#152238;
+      --muted:#5b6b7a;
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text)}
+    .wrap{max-width:980px;margin:24px auto;padding:18px}
+    header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+    h1{font-size:1.25rem;margin:0}
+    .controls{display:flex;gap:10px;align-items:center}
+    .stats{display:flex;gap:12px;align-items:center;color:var(--muted);font-size:0.95rem}
+    button.primary{background:var(--accent);color:#fff;border:0;padding:8px 12px;border-radius:8px;cursor:pointer}
+    button.ghost{background:transparent;border:1px solid rgba(21,34,56,0.08);padding:8px 10px;border-radius:8px;cursor:pointer}
+    main{background:linear-gradient(180deg, rgba(255,255,255,0.6), rgba(255,255,255,0.4));padding:16px;border-radius:12px;box-shadow:0 6px 18px rgba(21,34,56,0.06)}
+    .board{display:grid;gap:12px}
+    /* responsive grid: 5 columns on wide, 4 on medium, 3 on small */
+    @media (min-width:900px){ .board{grid-template-columns:repeat(5,1fr)} }
+    @media (min-width:600px) and (max-width:899px){ .board{grid-template-columns:repeat(4,1fr)} }
+    @media (max-width:599px){ .board{grid-template-columns:repeat(3,1fr)} }
+
+    .card{
+      position:relative;
+      perspective:1000px;
+      height:110px;
+    }
+    .card-button{
+      width:100%;height:100%;border-radius:10px;border:0;padding:0;background:none;
+      cursor:pointer;outline:none;display:block;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .flip-inner{
+      position:relative;width:100%;height:100%;transition:transform .5s;transform-style:preserve-3d;
+    }
+    .card.flipped .flip-inner{ transform: rotateY(180deg); }
+    .face{
+      position:absolute;inset:0;border-radius:10px;backface-visibility:hidden;display:flex;align-items:center;justify-content:center;
+      font-size:1.1rem;font-weight:600;color:var(--text);
+      box-shadow:0 4px 10px rgba(21,34,56,0.06);
+    }
+    .face.front{ background:linear-gradient(180deg,#ffffff,#f7fbff); }
+    .face.back{ background:var(--card); transform:rotateY(180deg); border:2px dashed rgba(21,34,56,0.04); color:var(--muted); font-weight:700 }
+    .face.found{ background:linear-gradient(90deg, rgba(43,124,255,0.14), rgba(46,204,113,0.08)); color:var(--text); box-shadow:none; }
+    .face.badshake{ animation:shake .5s }
+    @keyframes shake{ 0%{transform:translateX(0)}25%{transform:translateX(-6px)}50%{transform:translateX(6px)}75%{transform:translateX(-4px)}100%{transform:translateX(0)} }
+
+    .hud{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:12px}
+    .message{padding:10px 12px;border-radius:10px;background:rgba(43,124,255,0.06);color:var(--accent);display:inline-block}
+    .sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    footer{margin-top:12px;color:var(--muted);font-size:0.9rem}
+    /* small accessibility focus styles */
+    .card-button:focus-visible{box-shadow:0 0 0 3px rgba(43,124,255,0.18);border-radius:10px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Einmaleins‑Matching</h1>
+      <div class="controls">
+        <div class="stats" aria-live="polite">
+          <span id="foundCounter">Gefundene Paare: 0/12</span>
+          <span id="mistakes">Fehlversuche: 0</span>
+        </div>
+        <button id="restartBtn" class="primary" title="Neues Spiel starten">Neustart</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="board" class="board" role="grid" aria-label="Spielbrett mit Karten"></div>
+
+      <div class="hud" aria-live="polite">
+        <div id="message" class="message" style="display:none"></div>
+      </div>
+
+      <footer>
+        Tippe oder klicke zwei Karten, um Aufgabe und passende Lösung zu finden. Eine Karte ist eine Ablenkung und passt zu keiner Aufgabe.
+      </footer>
+    </main>
+
+    <p class="sr-only" id="a11yStatus">Spiel gestartet.</p>
+  </div>
+
+  <script>
+    /* --- Lokalisierbare Texte --- */
+    const TEXT = {
+      foundPairs: (n,total)=>`Gefundene Paare: ${n}/${total}`,
+      mistakes: (n)=>`Fehlversuche: ${n}`,
+      win: (mistakes)=>`Glückwunsch! Du hast alle Paare gefunden. Fehlversuche: ${mistakes}`,
+      restart: 'Neustart',
+      cardClosed: 'Karte zugeklappt',
+      cardOpen: 'Karte aufgedeckt',
+      cardFound: 'Karte gefunden'
+    };
+
+    /* --- Aufgabenliste (12 eindeutige Lösungen sicherstellen) --- */
+    const tasks = [
+      {q:'2×2', a:4},
+      {q:'2×3', a:6},
+      {q:'2×4', a:8},
+      {q:'3×3', a:9},
+      {q:'3×4', a:12},
+      {q:'4×4', a:16},
+      {q:'2×6', a:12}, /* NOTE: same result 12 as 3×4 -> to ensure unique solutions, we'll avoid duplicates programmatically */
+      {q:'3×6', a:18},
+      {q:'4×6', a:24},
+      {q:'5×5', a:25},
+      {q:'6×6', a:36},
+      {q:'7×5', a:35}
+    ];
+    /* Ensure uniqueness of solutions: if duplicates exist, replace conflicting entries */
+    (function ensureUnique(){
+      const seen = new Map();
+      for(let i=0;i<tasks.length;i++){
+        let val = tasks[i].a;
+        if(seen.has(val)){
+          // find a nearby unique value not used (increase by 1 until unique)
+          let candidate = val+1;
+          while(seen.has(candidate) || tasks.some(t=>t.a===candidate)) candidate++;
+          tasks[i].a = candidate;
+        }
+        seen.set(tasks[i].a,true);
+      }
+    })();
+
+    /* Create the 25 card models: 12 task cards, 12 solution cards, 1 distractor */
+    function createDeck(){
+      const deck = [];
+      // Add task cards
+      tasks.forEach((t,idx)=>{
+        deck.push({id:`task-${idx}`, type:'task', label:t.q, value:t.a, pairId:idx});
+      });
+      // Add solution cards
+      tasks.forEach((t,idx)=>{
+        deck.push({id:`sol-${idx}`, type:'sol', label:String(t.a), value:t.a, pairId:idx});
+      });
+      // Add distractor: choose a number not equal to any solution
+      let distractor = 999;
+      const solutionVals = new Set(tasks.map(t=>t.a));
+      for(let d=1; d<200; d++){
+        if(!solutionVals.has(d) && d!==0){ distractor=d; break; }
+      }
+      deck.push({id:`distr`, type:'distr', label:String(distractor), value:distractor, pairId:null});
+      return shuffle(deck);
+    }
+
+    /* Fisher-Yates shuffle */
+    function shuffle(array){
+      const a = array.slice();
+      for(let i=a.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [a[i],a[j]]=[a[j],a[i]];
+      }
+      return a;
+    }
+
+    /* --- Game State --- */
+    const TOTAL_PAIRS = tasks.length; // 12
+    let deck = [];
+    let firstCard = null;
+    let secondCard = null;
+    let lockBoard = false;
+    let foundCount = 0;
+    let mistakes = 0;
+
+    /* DOM references */
+    const boardEl = document.getElementById('board');
+    const foundCounter = document.getElementById('foundCounter');
+    const mistakesEl = document.getElementById('mistakes');
+    const restartBtn = document.getElementById('restartBtn');
+    const messageEl = document.getElementById('message');
+    const a11yStatus = document.getElementById('a11yStatus');
+
+    /* Initialize game */
+    function init(){
+      deck = createDeck();
+      firstCard = null; secondCard = null; lockBoard=false; foundCount=0; mistakes=0;
+      foundCounter.textContent = TEXT.foundPairs(foundCount,TOTAL_PAIRS);
+      mistakesEl.textContent = TEXT.mistakes(mistakes);
+      messageEl.style.display='none';
+      renderBoard();
+      a11yStatus.textContent = 'Neues Spiel gestartet.';
+    }
+
+    /* Render board: create 25 card elements */
+    function renderBoard(){
+      boardEl.innerHTML='';
+      deck.forEach((cardModel, index) => {
+        const cell = document.createElement('div');
+        cell.className = 'card';
+        cell.setAttribute('role','gridcell');
+        cell.setAttribute('data-index', index);
+
+        const btn = document.createElement('button');
+        btn.className = 'card-button';
+        btn.type = 'button';
+        btn.setAttribute('aria-pressed','false');
+        btn.setAttribute('aria-label', `Karte ${index+1}: ${cardModel.type==='task' ? 'Aufgabe' : (cardModel.type==='sol' ? 'Lösung' : 'Ablenkung')}`);
+        btn.tabIndex = 0;
+
+        // inner flip structure
+        const inner = document.createElement('div');
+        inner.className = 'flip-inner';
+
+        const faceBack = document.createElement('div');
+        faceBack.className = 'face back';
+        faceBack.textContent = '?';
+        faceBack.setAttribute('aria-hidden','true');
+
+        const faceFront = document.createElement('div');
+        faceFront.className = 'face front';
+        faceFront.textContent = ''; // filled when flipped
+        faceFront.setAttribute('aria-hidden','true');
+
+        inner.appendChild(faceBack);
+        inner.appendChild(faceFront);
+        btn.appendChild(inner);
+        cell.appendChild(btn);
+        boardEl.appendChild(cell);
+
+        // store model on element
+        cell._model = Object.assign({}, cardModel, {flipped:false,found:false,element:cell});
+
+        // event handlers
+        btn.addEventListener('click', ()=> onCardClick(cell));
+        btn.addEventListener('keydown', (e)=> {
+          if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCardClick(cell); }
+        });
+      });
+    }
+
+    /* Card click logic */
+    function onCardClick(cell){
+      const model = cell._model;
+      if(lockBoard) return;
+      if(model.found) return; // already matched
+      if(model.flipped) return; // already flipped in this turn
+
+      flipCardOpen(cell);
+
+      if(!firstCard){
+        firstCard = cell;
+        announceA11y('Karte aufgedeckt');
+        return;
+      }
+      if(firstCard === cell) return;
+
+      secondCard = cell;
+      lockBoard = true;
+
+      // compare
+      setTimeout(()=> checkForMatch(), 300);
+    }
+
+    function flipCardOpen(cell){
+      const model = cell._model;
+      const btn = cell.querySelector('.card-button');
+      model.flipped = true;
+      cell.classList.add('flipped');
+      const front = cell.querySelector('.face.front');
+      front.textContent = model.label;
+      btn.setAttribute('aria-pressed','true');
+      btn.setAttribute('aria-label', `${model.label} (${model.type==='task'?'Aufgabe':'Lösung'})`);
+    }
+
+    function flipCardClose(cell){
+      const model = cell._model;
+      const btn = cell.querySelector('.card-button');
+      model.flipped = false;
+      cell.classList.remove('flipped');
+      const front = cell.querySelector('.face.front');
+      front.textContent = '';
+      btn.setAttribute('aria-pressed','false');
+      btn.setAttribute('aria-label', `Karte zugeklappt`);
+    }
+
+    function markFound(a,b){
+      a._model.found = true;
+      b._model.found = true;
+      a.classList.add('found'); b.classList.add('found');
+      const fa = a.querySelector('.face.front'); fa.classList.add('found'); 
+      const fb = b.querySelector('.face.front'); fb.classList.add('found');
+      // make buttons inert
+      a.querySelector('.card-button').disabled=true;
+      b.querySelector('.card-button').disabled=true;
+      foundCount++;
+      foundCounter.textContent = TEXT.foundPairs(foundCount,TOTAL_PAIRS);
+      announceA11y('Karten gefunden');
+      if(foundCount === TOTAL_PAIRS){
+        // win
+        setTimeout(()=> showWin(), 500);
+      }
+    }
+
+    function checkForMatch(){
+      const a = firstCard._model;
+      const b = secondCard._model;
+      let isMatch = false;
+
+      // Match if pairId equal and one is task and one is sol
+      if(a.pairId !== null && a.pairId === b.pairId && a.type !== b.type){
+        isMatch = true;
+      }
+
+      if(isMatch){
+        markFound(firstCard, secondCard);
+        resetTurn();
+      } else {
+        // Not a match: show a small shake and close after delay, increment mistakes
+        mistakes++;
+        mistakesEl.textContent = TEXT.mistakes(mistakes);
+        const faceA = firstCard.querySelector('.face.front');
+        const faceB = secondCard.querySelector('.face.front');
+        faceA.classList.add('badshake'); faceB.classList.add('badshake');
+        announceA11y('Nicht passend');
+        setTimeout(()=>{
+          faceA.classList.remove('badshake'); faceB.classList.remove('badshake');
+          flipCardClose(firstCard); flipCardClose(secondCard);
+          resetTurn();
+        }, 800);
+      }
+    }
+
+    function resetTurn(){
+      [firstCard,secondCard]=[null,null];
+      lockBoard=false;
+    }
+
+    function showWin(){
+      messageEl.style.display='inline-block';
+      messageEl.textContent = TEXT.win(mistakes);
+      a11yStatus.textContent = `Gewonnen mit ${mistakes} Fehlversuchen.`;
+    }
+
+    function announceA11y(text){
+      a11yStatus.textContent = text;
+    }
+
+    /* Restart button */
+    restartBtn.addEventListener('click', ()=> {
+      init();
+    });
+
+    /* Start on load */
+    init();
+
+    /* Sanity check: confirm there are exactly 25 elements in the DOM */
+    (function checkCount(){
+      // Wait a tick for render
+      setTimeout(()=>{
+        const count = boardEl.querySelectorAll('.card').length;
+        if(count !== 25){
+          console.warn('Erwartet 25 Karten im Board, gefunden:', count);
+        }
+      },100);
+    })();
+  </script>
+</body>
+</html>
